@@ -1,26 +1,29 @@
-from typing import Annotated, Final, Self
+from typing import Annotated, Final, Self, TypeVar, Generic, Any
 
 from gspread.worksheet import Worksheet
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 
 from ..shared.decorators import retry_on_fail
 from .enums import CheckType
 from .g_sheet import gsheet_client
+from .exceptions import SheetError
+
+T = TypeVar("T")
 
 COL_META: Final[str] = "col_name_xxx"
 IS_UPDATE_META: Final[str] = "is_update_xxx"
 IS_NOTE_META: Final[str] = "is_note_xxx"
 
-INCLUDE_ROW_INDEX: Final[int] = 2
-EXCLUDE_ROW_INDEX: Final[int] = 3
-RELAX_ROW_INDEX: Final[int] = 2
+
+class NoteMessageUpdatePayload(BaseModel):
+    index: int
+    message: str
 
 
-class InExKeywordRelaxTime(BaseModel):
-    include_keywords: dict[str, list[str] | None]
-    exclude_keywords: dict[str, list[str] | None]
-    relax_time: int
+class BatchCellUpdatePayload(BaseModel, Generic[T]):
+    cell: str
+    value: T
 
 
 class ColSheetModel(BaseModel):
@@ -60,7 +63,11 @@ class ColSheetModel(BaseModel):
         for field_name, field_info in cls.model_fields.items():
             if hasattr(field_info, "metadata"):
                 for metadata in field_info.metadata:
-                    if COL_META in metadata and IS_UPDATE_META in metadata:
+                    if (
+                        COL_META in metadata
+                        and IS_UPDATE_META in metadata
+                        and metadata[IS_UPDATE_META]
+                    ):
                         mapping_fields[field_name] = metadata[COL_META]
                         break
 
@@ -111,6 +118,7 @@ class ColSheetModel(BaseModel):
         mapping_dict = cls.mapping_fields()
 
         result_list: list[Self] = []
+        error_list: list[NoteMessageUpdatePayload] = []
 
         query_value = []
         for index in indexes:
@@ -133,8 +141,20 @@ class ColSheetModel(BaseModel):
                 if isinstance(model_dict[k], str):
                     model_dict[k] = model_dict[k].strip()
                 count += 1
+            try:
+                result_list.append(cls.model_validate(model_dict))
+            except ValidationError as e:
+                error_list.append(
+                    NoteMessageUpdatePayload(
+                        index=index,
+                        message=f"Validation Error at row {index}: {e.errors(include_url=False)}",
+                    )
+                )
 
-            result_list.append(cls.model_validate(model_dict))
+        cls.batch_update_note_message(
+            sheet_id=sheet_id, sheet_name=sheet_name, update_payloads=error_list
+        )
+
         return result_list
 
     @classmethod
@@ -214,94 +234,174 @@ class ColSheetModel(BaseModel):
                                 }
                             ]
                         )
+                        return
+
+        raise SheetError("Can't update sheet message")
+
+    @classmethod
+    @retry_on_fail(max_retries=5, sleep_interval=30)
+    def batch_update_note_message(
+        cls,
+        sheet_id: str,
+        sheet_name: str,
+        update_payloads: list[NoteMessageUpdatePayload],
+    ):
+        for field_name, field_info in cls.model_fields.items():
+            if hasattr(field_info, "metadata"):
+                for metadata in field_info.metadata:
+                    if (
+                        COL_META in metadata
+                        and IS_NOTE_META in metadata
+                        and metadata[IS_NOTE_META]
+                    ):
+                        worksheet = cls.get_worksheet(
+                            sheet_id=sheet_id,
+                            sheet_name=sheet_name,
+                        )
+
+                        batch: list[dict] = []
+                        for payload in update_payloads:
+                            batch.append(
+                                {
+                                    "range": f"{metadata[COL_META]}{payload.index}",
+                                    "values": [[payload.message]],
+                                }
+                            )
+                        worksheet.batch_update(batch)
+                        return
+
+        raise SheetError("Can't update sheet message")
+
+    @classmethod
+    @retry_on_fail(max_retries=5, sleep_interval=30)
+    def free_style_batch_update(
+        cls,
+        sheet_id: str,
+        sheet_name: str,
+        update_payloads: list[BatchCellUpdatePayload],
+    ):
+        worksheet = cls.get_worksheet(sheet_id=sheet_id, sheet_name=sheet_name)
+        batch: list[dict] = []
+        for payload in update_payloads:
+            batch.append(
+                {
+                    "range": payload.cell,
+                    "values": [[payload.value]],
+                }
+            )
+
+        worksheet.batch_update(batch)
+
+    @classmethod
+    @retry_on_fail(max_retries=5, sleep_interval=10)
+    def get_cell_value(
+        cls,
+        sheet_id: str,
+        sheet_name: str,
+        cell: str,
+    ) -> Any | None:
+        res = gsheet_client.http_client.values_get(
+            params={"valueRenderOption": "UNFORMATTED_VALUE"},
+            id=sheet_id,
+            range=f"{sheet_name}!{cell}",
+        )
+
+        stock = res.get("values", None)
+        if stock:
+            return stock[0][0]
+
+        return None
 
 
-class Product(ColSheetModel):
+class RowModel(ColSheetModel):
     CHECK: Annotated[
-        str | None,
-        {
-            COL_META: "A",
-        },
-    ] = None
-    code: Annotated[
-        str | None,
+        str,
         {
             COL_META: "B",
-            IS_UPDATE_META: True,
         },
-    ] = None
-    category_code: Annotated[
+    ]
+    GAME: Annotated[
         str | None,
         {
             COL_META: "C",
-            IS_UPDATE_META: True,
         },
     ] = None
-    name: Annotated[
+    PACK: Annotated[
         str | None,
         {
             COL_META: "D",
-            IS_UPDATE_META: True,
         },
     ] = None
-    provider_code: Annotated[
-        str | None,
+    code: Annotated[
+        str,
         {
             COL_META: "E",
-            IS_UPDATE_META: True,
         },
-    ] = None
-    price: Annotated[
+    ]
+    LOWEST_PRICE: Annotated[
         str | None,
         {
             COL_META: "F",
             IS_UPDATE_META: True,
         },
     ] = None
-    process_time: Annotated[
+    NOTE: Annotated[
         str | None,
         {
             COL_META: "G",
             IS_UPDATE_META: True,
-        },
-    ] = None
-    country_code: Annotated[
-        str | None,
-        {
-            COL_META: "H",
-            IS_UPDATE_META: True,
-        },
-    ] = None
-    status: Annotated[
-        str | None,
-        {
-            COL_META: "I",
-            IS_UPDATE_META: True,
-        },
-    ] = None
-    Note: Annotated[
-        str | None,
-        {
-            COL_META: "J",
-            IS_UPDATE_META: True,
             IS_NOTE_META: True,
         },
     ] = None
-    Relax: Annotated[
+    STATUS: Annotated[
+        str | None,
+        {
+            COL_META: "H",
+        },
+    ] = None
+    process_time: Annotated[
         int | None,
+        {
+            COL_META: "I",
+        },
+    ] = None
+    country_code_priority: Annotated[
+        str | None,
+        {
+            COL_META: "J",
+        },
+    ] = None
+    FILL_IN: Annotated[
+        str | None,
         {
             COL_META: "K",
         },
     ] = None
+    ID_SHEET: Annotated[
+        str | None,
+        {
+            COL_META: "L",
+        },
+    ] = None
+    SHEET: Annotated[
+        str | None,
+        {
+            COL_META: "M",
+        },
+    ] = None
+    CELL: Annotated[
+        str | None,
+        {
+            COL_META: "N",
+        },
+    ] = None
 
-    @field_validator("price", "process_time", mode="before")
-    def convert_to_str(cls, v):
-        return str(v) if isinstance(v, (int, float)) else v
-
-    @staticmethod
+    @classmethod
     @retry_on_fail(max_retries=5, sleep_interval=10)
-    def get_run_indexes(sheet_id: str, sheet_name: str, col_index: int) -> list[int]:
-        sheet = Product.get_worksheet(sheet_id=sheet_id, sheet_name=sheet_name)
+    def get_run_indexes(
+        cls, sheet_id: str, sheet_name: str, col_index: int
+    ) -> list[int]:
+        sheet = cls.get_worksheet(sheet_id=sheet_id, sheet_name=sheet_name)
         run_indexes = []
         check_col = sheet.col_values(col_index)
         for idx, value in enumerate(check_col):
@@ -312,63 +412,3 @@ class Product(ColSheetModel):
                 run_indexes.append(idx)
 
         return run_indexes
-
-    @staticmethod
-    def get_start_index() -> int:
-        return 4
-
-    @staticmethod
-    @retry_on_fail(max_retries=10, sleep_interval=10)
-    def get_include_exclude_keywords_mapping_relax_time(
-        sheet_id: str, sheet_name: str
-    ) -> InExKeywordRelaxTime:
-        [include, exclude] = Product.batch_get(
-            sheet_id=sheet_id,
-            sheet_name=sheet_name,
-            indexes=[INCLUDE_ROW_INDEX, EXCLUDE_ROW_INDEX],
-        )
-
-        updated_mapping_fields = Product.updated_mapping_fields()
-
-        include_dict = {
-            k: [i.strip() for i in v.split(",")] if v else None
-            for k, v in include.model_dump(mode="json").items()
-            if k in updated_mapping_fields
-        }
-
-        exclude_dict = {
-            k: [i.strip() for i in v.split(",")] if v else None
-            for k, v in exclude.model_dump(mode="json").items()
-            if k in updated_mapping_fields
-        }
-
-        return InExKeywordRelaxTime(
-            include_keywords=include_dict,
-            exclude_keywords=exclude_dict,
-            relax_time=include.Relax if include.Relax else 3600,
-        )
-
-    @staticmethod
-    @retry_on_fail(max_retries=10, sleep_interval=10)
-    def clear_sheet(sheet_id: str, sheet_name: str, start_row: int) -> None:
-        worksheet = Product.get_worksheet(sheet_id=sheet_id, sheet_name=sheet_name)
-        # Fetch sheet dimensions
-        total_rows = worksheet.row_count
-        total_cols = worksheet.col_count
-
-        # Helper to convert column index to letter (e.g., 1 -> 'A', 27 -> 'AA')
-        def _col_idx_to_letter(idx: int) -> str:
-            letters = ""
-            while idx > 0:
-                idx, rem = divmod(idx - 1, 26)
-                letters = chr(65 + rem) + letters
-            return letters
-
-        end_col_letter = _col_idx_to_letter(total_cols)
-        end_range = f"{end_col_letter}{total_rows}"  # e.g. 'Z1000'
-
-        # Define A1 range to clear: from A{start_row} to end
-        clear_range = f"A{start_row}:{end_range}"
-
-        # Perform batch clear
-        worksheet.batch_clear([clear_range])
