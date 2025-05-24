@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from typing import Annotated, Final, Self, TypeVar, Generic, Any
 
 from gspread.worksheet import Worksheet
@@ -8,6 +10,7 @@ from ..shared.decorators import retry_on_fail
 from .enums import CheckType
 from .g_sheet import gsheet_client
 from .exceptions import SheetError
+from ..utils import formated_datetime
 
 T = TypeVar("T")
 
@@ -147,7 +150,7 @@ class ColSheetModel(BaseModel):
                 error_list.append(
                     NoteMessageUpdatePayload(
                         index=index,
-                        message=f"Validation Error at row {index}: {e.errors(include_url=False)}",
+                        message=f"{formated_datetime(datetime.now())} Validation Error at row {index}: {e.errors(include_url=False)}",
                     )
                 )
 
