@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import Annotated, Final, Self, TypeVar, Generic, Any
 
 from gspread.worksheet import Worksheet
+from gspread.utils import ValueInputOption
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 
@@ -187,7 +188,9 @@ class ColSheetModel(BaseModel):
                 )
 
         if len(list_object) > 0:
-            worksheet.batch_update(update_batch)
+            worksheet.batch_update(
+                update_batch, value_input_option=ValueInputOption.user_entered
+            )
 
     @retry_on_fail(max_retries=3, sleep_interval=30)
     def update(
@@ -209,7 +212,9 @@ class ColSheetModel(BaseModel):
                 }
             )
 
-        worksheet.batch_update(update_batch)
+        worksheet.batch_update(
+            update_batch, value_input_option=ValueInputOption.user_entered
+        )
 
     @classmethod
     @retry_on_fail(max_retries=5, sleep_interval=30)
@@ -235,7 +240,8 @@ class ColSheetModel(BaseModel):
                                     "range": f"{metadata[COL_META]}{index}",
                                     "values": [[messages]],
                                 }
-                            ]
+                            ],
+                            value_input_option=ValueInputOption.user_entered,
                         )
                         return
 
@@ -270,7 +276,9 @@ class ColSheetModel(BaseModel):
                                     "values": [[payload.message]],
                                 }
                             )
-                        worksheet.batch_update(batch)
+                        worksheet.batch_update(
+                            batch, value_input_option=ValueInputOption.user_entered
+                        )
                         return
 
         raise SheetError("Can't update sheet message")
@@ -293,7 +301,7 @@ class ColSheetModel(BaseModel):
                 }
             )
 
-        worksheet.batch_update(batch)
+        worksheet.batch_update(batch, value_input_option=ValueInputOption.user_entered)
 
     @classmethod
     @retry_on_fail(max_retries=5, sleep_interval=10)
