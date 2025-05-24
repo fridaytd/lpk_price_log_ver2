@@ -3,13 +3,15 @@ from typing import Final
 
 from app import logger, config
 
-from .sheet.models import RowModel
+from .sheet.models import RowModel, BatchCellUpdatePayload
+from .sheet.enums import CheckType
 from .lpk.api_client import lpk_api_client
 from .lpk.models import Product as LpkProduct
 from .lpk.consts import COUNTRY_CODES
-from .utils import note_message
+from .utils import note_message, sleep_for
 
 SEPERATED_CHAR: Final[str] = ","
+RELAX_TIME_CELL: Final[str] = "O2"
 
 
 def to_product_dict(
@@ -77,26 +79,69 @@ def min_lpk_products(
     for country_code in [
         code.strip() for code in row_model.country_code_priority.split(SEPERATED_CHAR)
     ]:
-        for offer in min_price_products:
-            if offer.country_code in country_code:
-                return offer
+        for product in min_price_products:
+            if product.country_code in country_code:
+                return product
 
     return min_price_products[0]
+
+
+def batch_update_price(
+    to_be_updated_row_models: list[RowModel],
+):
+    update_dict: dict[str, dict[str, list[BatchCellUpdatePayload]]] = {}
+    for row_model in to_be_updated_row_models:
+        if row_model.ID_SHEET and row_model.SHEET and row_model.CELL:
+            if row_model.ID_SHEET not in update_dict:
+                update_dict[row_model.ID_SHEET] = {}
+                update_dict[row_model.ID_SHEET][row_model.SHEET] = [
+                    BatchCellUpdatePayload[str](
+                        cell=row_model.CELL,
+                        value=row_model.LOWEST_PRICE if row_model.LOWEST_PRICE else "",
+                    )
+                ]
+
+            else:
+                if row_model.SHEET not in update_dict[row_model.ID_SHEET]:
+                    update_dict[row_model.ID_SHEET][row_model.SHEET] = [
+                        BatchCellUpdatePayload[str](
+                            cell=row_model.CELL,
+                            value=row_model.LOWEST_PRICE
+                            if row_model.LOWEST_PRICE
+                            else "",
+                        )
+                    ]
+                else:
+                    update_dict[row_model.ID_SHEET][row_model.SHEET].append(
+                        BatchCellUpdatePayload[str](
+                            cell=row_model.CELL,
+                            value=row_model.LOWEST_PRICE
+                            if row_model.LOWEST_PRICE
+                            else "",
+                        )
+                    )
+
+    for sheet_id, sheet_names in update_dict.items():
+        for sheet_name, update_batch in sheet_names.items():
+            RowModel.free_style_batch_update(
+                sheet_id=sheet_id, sheet_name=sheet_name, update_payloads=update_batch
+            )
 
 
 def process():
     # Get all products from lapakgaming
     lpk_products: list[LpkProduct] = []
+    logger.info("# Getting products from Lapakgaming")
     for country_code in COUNTRY_CODES.keys():
         __lpk_products = lpk_api_client.get_all_products(
             country_code=country_code
         ).data.products
         logger.info(
-            f"Total product for country code {country_code}: {len(__lpk_products)}"
+            f"### Total product for country code {country_code}: {len(__lpk_products)}"
         )
         lpk_products.extend(__lpk_products)
 
-    logger.info(f"Total product: {len(lpk_products)}")
+    logger.info(f"## Total product: {len(lpk_products)}")
 
     # Convert to dict with key: LpkProduct.code
     lpk_product_dict = to_product_dict(lpk_products)
@@ -109,13 +154,18 @@ def process():
     )
 
     # Get all run row from sheet
+    logger.info(f"Get all run row from sheet: {run_indexes}")
     row_models = RowModel.batch_get(
         sheet_id=config.SPREADSHEET_KEY,
         sheet_name=config.SHEET_NAME,
         indexes=run_indexes,
     )
 
+    to_be_updated_row_models: list[RowModel] = []
+
     # Process for each row model
+
+    logger.info("Processing")
     for row_model in row_models:
         lpk_codes = lpk_product_code_from_str(row_model.code)
         __products = [
@@ -141,9 +191,23 @@ def process():
                     if product.code != min_price_product.code
                 ],
             )
+            if row_model.FILL_IN == CheckType.RUN.value:
+                to_be_updated_row_models.append(row_model)
 
+    logger.info("Price sheet updating")
+    batch_update_price(to_be_updated_row_models)
+
+    logger.info("Sheet updating")
     RowModel.batch_update(
         sheet_id=config.SPREADSHEET_KEY,
         sheet_name=config.SHEET_NAME,
         list_object=row_models,
     )
+
+    str_relax_time = RowModel.get_cell_value(
+        sheet_id=config.SPREADSHEET_KEY,
+        sheet_name=config.SHEET_NAME,
+        cell=RELAX_TIME_CELL,
+    )
+
+    sleep_for(float(str_relax_time) if str_relax_time else 10)

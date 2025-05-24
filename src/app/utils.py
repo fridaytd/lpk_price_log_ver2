@@ -53,7 +53,7 @@ def note_message(
         message += "Không tìm thấy product hợp lệ\n"
 
     else:
-        message += f"Cập nhật thành công: code: {min_price_product.code}, {min_price_product.country_code}, {min_price_product.process_time}\n"
+        message += f"Cập nhật thành công: code: {min_price_product.code}; country_code = {min_price_product.country_code}, process_time = {min_price_product.process_time}\n"
 
     if len(other_products) > 0:
         message += f"Kết quả khác:\n{format_list_products(other_products)}"

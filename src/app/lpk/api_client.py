@@ -5,6 +5,7 @@ import httpx
 from .. import config
 from . import logger
 from .models import ProductResponse, Response
+from ..shared.decorators import retry_on_fail
 
 LPK_BASE_URL: Final[str] = "https://www.lapakgaming.com"
 
@@ -14,6 +15,7 @@ class LpkAPIClient:
         self.client = httpx.Client()
         self.base_url = LPK_BASE_URL
 
+    @retry_on_fail()
     def get_all_products(self, country_code: str = "id") -> Response[ProductResponse]:
         logger.info("API Get all product")
 

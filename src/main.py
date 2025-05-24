@@ -1,4 +1,4 @@
-from app.old_processes import process
+from app.processes import process
 from app import logger
 
 
