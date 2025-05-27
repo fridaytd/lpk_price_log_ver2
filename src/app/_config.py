@@ -1,7 +1,6 @@
 import os
 
 from dotenv import load_dotenv
-
 from pydantic import BaseModel
 
 
@@ -14,6 +13,10 @@ class Config(BaseModel):
     SHEET_NAME: str
 
     LAPAK_API_KEY: str
+
+    PROCESS_BATCH_SIZE: int
+
+    RELAX_TIME_EACH_BATCH: float
 
     RELAX_TIME_EACH_ROUND: float
 

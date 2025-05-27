@@ -6,6 +6,7 @@ from app import config, logger
 from .lpk.api_client import lpk_api_client
 from .lpk.consts import COUNTRY_CODES
 from .lpk.models import Product as LpkProduct
+from .shared.decorators import retry_on_fail
 from .sheet.enums import CheckType
 from .sheet.models import BatchCellUpdatePayload, RowModel
 from .utils import note_message, sleep_for, split_list
@@ -128,6 +129,65 @@ def batch_update_price(
             )
 
 
+@retry_on_fail(max_retries=5, sleep_interval=10)
+def batch_process(
+    lpk_product_dict: dict[str, LpkProduct],
+    indexes: list[int],
+):
+    # Get all run row from sheet
+    logger.info(f"Get all run row from sheet: {indexes}")
+    row_models = RowModel.batch_get(
+        sheet_id=config.SPREADSHEET_KEY,
+        sheet_name=config.SHEET_NAME,
+        indexes=indexes,
+    )
+
+    to_be_updated_row_models: list[RowModel] = []
+
+    # Process for each row model
+
+    logger.info("Processing")
+    for row_model in row_models:
+        lpk_codes = lpk_product_code_from_str(row_model.code)
+        __products = [
+            lpk_product_dict[code] for code in lpk_codes if code in lpk_product_dict
+        ]
+
+        min_price_product = min_lpk_products(
+            row_model=row_model, lpk_products=__products
+        )
+
+        if min_price_product is None:
+            row_model.LOWEST_PRICE = ""
+            row_model.NOTE = note_message(datetime.now(), min_price_product, __products)
+
+        else:
+            row_model.LOWEST_PRICE = str(min_price_product.price)
+            row_model.NOTE = note_message(
+                datetime.now(),
+                min_price_product,
+                [
+                    product
+                    for product in __products
+                    if product.code != min_price_product.code
+                ],
+            )
+            if row_model.FILL_IN == CheckType.RUN.value:
+                to_be_updated_row_models.append(row_model)
+
+    logger.info("Price sheet updating")
+    batch_update_price(to_be_updated_row_models)
+
+    logger.info("Sheet updating")
+    RowModel.batch_update(
+        sheet_id=config.SPREADSHEET_KEY,
+        sheet_name=config.SHEET_NAME,
+        list_object=row_models,
+    )
+
+    sleep_for(config.RELAX_TIME_EACH_BATCH)
+
+
 def process():
     # Get all products from lapakgaming
     lpk_products: list[LpkProduct] = []
@@ -153,61 +213,11 @@ def process():
         col_index=2,
     )
 
-    for batch_indexes in split_list(run_indexes, 40):
-        # Get all run row from sheet
-        logger.info(f"Get all run row from sheet: {batch_indexes}")
-        row_models = RowModel.batch_get(
-            sheet_id=config.SPREADSHEET_KEY,
-            sheet_name=config.SHEET_NAME,
+    for batch_indexes in split_list(run_indexes, config.PROCESS_BATCH_SIZE):
+        batch_process(
+            lpk_product_dict=lpk_product_dict,
             indexes=batch_indexes,
         )
-
-        to_be_updated_row_models: list[RowModel] = []
-
-        # Process for each row model
-
-        logger.info("Processing")
-        for row_model in row_models:
-            lpk_codes = lpk_product_code_from_str(row_model.code)
-            __products = [
-                lpk_product_dict[code] for code in lpk_codes if code in lpk_product_dict
-            ]
-
-            min_price_product = min_lpk_products(
-                row_model=row_model, lpk_products=__products
-            )
-
-            if min_price_product is None:
-                row_model.LOWEST_PRICE = ""
-                row_model.NOTE = note_message(
-                    datetime.now(), min_price_product, __products
-                )
-
-            else:
-                row_model.LOWEST_PRICE = str(min_price_product.price)
-                row_model.NOTE = note_message(
-                    datetime.now(),
-                    min_price_product,
-                    [
-                        product
-                        for product in __products
-                        if product.code != min_price_product.code
-                    ],
-                )
-                if row_model.FILL_IN == CheckType.RUN.value:
-                    to_be_updated_row_models.append(row_model)
-
-        logger.info("Price sheet updating")
-        batch_update_price(to_be_updated_row_models)
-
-        logger.info("Sheet updating")
-        RowModel.batch_update(
-            sheet_id=config.SPREADSHEET_KEY,
-            sheet_name=config.SHEET_NAME,
-            list_object=row_models,
-        )
-
-        sleep_for(2)
 
     str_relax_time = RowModel.get_cell_value(
         sheet_id=config.SPREADSHEET_KEY,
