@@ -1,7 +1,12 @@
 from datetime import datetime
 from typing import Final
 
+from gspread.worksheet import ValueRange
+from gspread.utils import rowcol_to_a1
+
+
 from app import config, logger
+from app.sheet.utils import fri_a1_range_to_grid_range
 
 from .lpk.api_client import lpk_api_client
 from .lpk.consts import COUNTRY_CODES
@@ -12,7 +17,7 @@ from .sheet.models import BatchCellUpdatePayload, RowModel
 from .utils import note_message, sleep_for, split_list
 
 SEPERATED_CHAR: Final[str] = ","
-RELAX_TIME_CELL: Final[str] = "O2"
+RELAX_TIME_CELL: Final[str] = "Q2"
 
 
 def to_product_dict(
@@ -87,40 +92,109 @@ def min_lpk_products(
     return min_price_products[0]
 
 
+def find_cell_to_update(row_models: list[RowModel]) -> dict[str, str]:
+    mapping_dict: dict[str, str] = {}
+
+    sheet_get_batch_dict: dict[str, dict[str, list[str]]] = {}
+
+    for row_model in row_models:
+        if (
+            row_model.FILL_IN
+            and row_model.ID_SHEET
+            and row_model.SHEET
+            and row_model.COL_NOTE
+            and row_model.CODE
+            and row_model.COL_CODE
+        ):
+            range_code = f"{row_model.COL_CODE}:{row_model.COL_CODE}"
+            if row_model.ID_SHEET not in sheet_get_batch_dict:
+                sheet_get_batch_dict[row_model.ID_SHEET] = {}
+                sheet_get_batch_dict[row_model.ID_SHEET][row_model.SHEET] = [range_code]
+            else:
+                if row_model.SHEET not in sheet_get_batch_dict[row_model.ID_SHEET]:
+                    sheet_get_batch_dict[row_model.ID_SHEET][row_model.SHEET] = [
+                        range_code
+                    ]
+                else:
+                    sheet_get_batch_dict[row_model.ID_SHEET][row_model.SHEET].append(
+                        range_code
+                    )
+    # dict[sheet_id, dict[sheet_name, range, value_range]]
+    sheet_get_batch_result_dict: dict[str, dict[str, dict[str, ValueRange]]] = {}
+
+    for sheet_id, sheet_names in sheet_get_batch_dict.items():
+        for sheet_name, get_batch in sheet_names.items():
+            _get_batch_resutl: list[ValueRange] = RowModel.get_worksheet(
+                sheet_id=sheet_id, sheet_name=sheet_name
+            ).batch_get(ranges=get_batch)
+            for i, range in enumerate(_get_batch_resutl):
+                if sheet_id not in sheet_get_batch_result_dict:
+                    sheet_get_batch_result_dict[sheet_id] = {}
+                if sheet_name not in sheet_get_batch_result_dict[sheet_id]:
+                    sheet_get_batch_result_dict[sheet_id][sheet_name] = {}
+                if (
+                    get_batch[i]
+                    not in sheet_get_batch_result_dict[sheet_id][sheet_name]
+                ):
+                    sheet_get_batch_result_dict[sheet_id][sheet_name][get_batch[i]] = (
+                        range
+                    )
+
+    for row_model in row_models:
+        if (
+            row_model.ID_SHEET
+            and row_model.SHEET
+            and row_model.COL_NOTE
+            and row_model.CODE
+            and row_model.COL_CODE
+        ):
+            # Convert to A1 notation
+            range_code = f"{row_model.COL_CODE}:{row_model.COL_CODE}"
+            range_note = f"{row_model.COL_NOTE}:{row_model.COL_NOTE}"
+
+            _codes_grid = sheet_get_batch_result_dict[row_model.ID_SHEET][
+                row_model.SHEET
+            ][range_code]
+
+            code_grid_range = fri_a1_range_to_grid_range(range_code)
+            note_grid_range = fri_a1_range_to_grid_range(range_note)
+            for i, code_row in enumerate(_codes_grid):
+                for j, code_col in enumerate(code_row):
+                    if (
+                        isinstance(code_col, str)
+                        and row_model.CODE.strip() == code_col.strip()
+                    ):
+                        target_row_index = i + 1 + code_grid_range.startRowIndex
+                        target_col_index = j + 1 + note_grid_range.startColumnIndex
+                        mapping_dict[str(row_model.index)] = rowcol_to_a1(
+                            target_row_index, target_col_index
+                        )
+
+    return mapping_dict
+
+
 def batch_update_price(
     to_be_updated_row_models: list[RowModel],
 ):
     update_dict: dict[str, dict[str, list[BatchCellUpdatePayload]]] = {}
+
+    update_cell_mapping = find_cell_to_update(to_be_updated_row_models)
+
     for row_model in to_be_updated_row_models:
-        if row_model.ID_SHEET and row_model.SHEET and row_model.CELL:
+        if row_model.ID_SHEET and row_model.SHEET and row_model.COL_NOTE:
             if row_model.ID_SHEET not in update_dict:
                 update_dict[row_model.ID_SHEET] = {}
-                update_dict[row_model.ID_SHEET][row_model.SHEET] = [
+
+            if row_model.SHEET not in update_dict[row_model.ID_SHEET]:
+                update_dict[row_model.ID_SHEET][row_model.SHEET] = []
+
+            if str(row_model.index) in update_cell_mapping:
+                update_dict[row_model.ID_SHEET][row_model.SHEET].append(
                     BatchCellUpdatePayload[str](
-                        cell=row_model.CELL,
+                        cell=update_cell_mapping[str(row_model.index)],
                         value=row_model.LOWEST_PRICE if row_model.LOWEST_PRICE else "",
                     )
-                ]
-
-            else:
-                if row_model.SHEET not in update_dict[row_model.ID_SHEET]:
-                    update_dict[row_model.ID_SHEET][row_model.SHEET] = [
-                        BatchCellUpdatePayload[str](
-                            cell=row_model.CELL,
-                            value=row_model.LOWEST_PRICE
-                            if row_model.LOWEST_PRICE
-                            else "",
-                        )
-                    ]
-                else:
-                    update_dict[row_model.ID_SHEET][row_model.SHEET].append(
-                        BatchCellUpdatePayload[str](
-                            cell=row_model.CELL,
-                            value=row_model.LOWEST_PRICE
-                            if row_model.LOWEST_PRICE
-                            else "",
-                        )
-                    )
+                )
 
     for sheet_id, sheet_names in update_dict.items():
         for sheet_name, update_batch in sheet_names.items():
@@ -207,11 +281,15 @@ def process():
     lpk_product_dict = to_product_dict(lpk_products)
 
     # Get run_indexes from sheet
+
+    logger.info("# Getting run indexes from sheet")
     run_indexes = RowModel.get_run_indexes(
         sheet_id=config.SPREADSHEET_KEY,
         sheet_name=config.SHEET_NAME,
         col_index=2,
     )
+
+    logger.info(f"## Total run indexes: {len(run_indexes)}")
 
     for batch_indexes in split_list(run_indexes, config.PROCESS_BATCH_SIZE):
         batch_process(
