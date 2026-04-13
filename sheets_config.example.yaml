@@ -1,0 +1,10 @@
+# sheets_config.example.yaml — Template for multi-sheet configuration
+# Copy this file to sheets_config.yaml and fill in your real spreadsheet IDs.
+# sheets_config.yaml is gitignored to prevent accidental exposure of spreadsheet IDs.
+
+sheets:
+  - name: "GameCategory1"          # Human-readable name; used in log output and error messages
+    spreadsheet_id: "YOUR_SPREADSHEET_ID_1_HERE"  # Google Sheets spreadsheet ID (found in the sheet URL)
+
+  - name: "GameCategory2"          # Second target sheet
+    spreadsheet_id: "YOUR_SPREADSHEET_ID_2_HERE"  # Replace with actual spreadsheet ID

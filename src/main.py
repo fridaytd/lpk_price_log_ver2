@@ -1,17 +1,19 @@
+import asyncio
+
 from app.processes import process
-from app import logger
+from app import config, logger
 
 
-def run_in_loop():
+async def run_loop():
     while True:
         try:
-            process()
+            await process()
         except Exception as e:
-            logger.exception(e)
+            logger.exception(f"Top-level error in process loop: {e}")
 
 
 def main():
-    run_in_loop()
+    asyncio.run(run_loop())
 
 
 if __name__ == "__main__":

@@ -3,7 +3,7 @@ from datetime import datetime
 
 from app import logger
 
-from .lpk.models import Product as LpkProduct
+from .lapakgaming.models import Product as LapakgamingProduct
 
 
 def sleep_for(delay: float) -> None:
@@ -33,7 +33,7 @@ def split_list(lst: list, chunk_size: int) -> list[list]:
 
 
 def format_list_products(
-    products: list[LpkProduct],
+    products: list[LapakgamingProduct],
 ) -> str:
     formated = ""
     for i, product in enumerate(products):
@@ -44,8 +44,8 @@ def format_list_products(
 
 def note_message(
     now: datetime,
-    min_price_product: LpkProduct | None,
-    other_products: list[LpkProduct],
+    min_price_product: LapakgamingProduct | None,
+    other_products: list[LapakgamingProduct],
 ) -> str:
     message = f"{formated_datetime(now)} "
 

@@ -2,14 +2,10 @@ from datetime import datetime
 
 from typing import Annotated, Final, Self, TypeVar, Generic, Any
 
-from gspread.worksheet import Worksheet
-from gspread.utils import ValueInputOption
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-
-from ..shared.decorators import retry_on_fail
+from . import async_sheets_client
 from .enums import CheckType
-from .g_sheet import gsheet_client
 from .exceptions import SheetError
 from ..utils import formated_datetime
 
@@ -37,17 +33,6 @@ class ColSheetModel(BaseModel):
     sheet_id: str
     sheet_name: str
     index: int
-
-    @classmethod
-    def get_worksheet(
-        cls,
-        sheet_id: str,
-        sheet_name: str,
-    ) -> Worksheet:
-        spreadsheet = gsheet_client.open_by_key(sheet_id)
-        worksheet = spreadsheet.worksheet(sheet_name)
-
-        return worksheet
 
     @classmethod
     def mapping_fields(cls) -> dict:
@@ -78,20 +63,17 @@ class ColSheetModel(BaseModel):
         return mapping_fields
 
     @classmethod
-    def get(
+    async def get(
         cls,
         sheet_id: str,
         sheet_name: str,
         index: int,
     ) -> Self:
         mapping_dict = cls.mapping_fields()
+        ranges = [f"{sheet_name}!{col}{index}" for _, col in mapping_dict.items()]
 
-        query_value = []
-
-        for _, v in mapping_dict.items():
-            query_value.append(f"{v}{index}")
-
-        worksheet = cls.get_worksheet(sheet_id=sheet_id, sheet_name=sheet_name)
+        response = await async_sheets_client.batch_get(sheet_id, ranges)
+        value_ranges = response.get("valueRanges", [])
 
         model_dict = {
             "index": index,
@@ -99,37 +81,38 @@ class ColSheetModel(BaseModel):
             "sheet_name": sheet_name,
         }
 
-        query_results = worksheet.batch_get(query_value)
-        count = 0
-        for k, _ in mapping_dict.items():
-            model_dict[k] = query_results[count].first()
-            if isinstance(model_dict[k], str):
-                model_dict[k] = model_dict[k].strip()
-            count += 1
+        for i, (field_name, _) in enumerate(mapping_dict.items()):
+            raw = (
+                value_ranges[i].get("values", [[None]])
+                if i < len(value_ranges)
+                else [[None]]
+            )
+            val = raw[0][0] if raw and raw[0] else None
+            if isinstance(val, str):
+                val = val.strip()
+            model_dict[field_name] = val
+
         return cls.model_validate(model_dict)
 
     @classmethod
-    def batch_get(
+    async def batch_get(
         cls,
         sheet_id: str,
         sheet_name: str,
         indexes: list[int],
     ) -> list[Self]:
-        worksheet = cls.get_worksheet(
-            sheet_id=sheet_id,
-            sheet_name=sheet_name,
-        )
         mapping_dict = cls.mapping_fields()
 
         result_list: list[Self] = []
         error_list: list[NoteMessageUpdatePayload] = []
 
-        query_value = []
+        ranges = []
         for index in indexes:
-            for _, v in mapping_dict.items():
-                query_value.append(f"{v}{index}")
+            for _, col in mapping_dict.items():
+                ranges.append(f"{sheet_name}!{col}{index}")
 
-        query_results = worksheet.batch_get(query_value)
+        response = await async_sheets_client.batch_get(sheet_id, ranges)
+        value_ranges = response.get("valueRanges", [])
 
         count = 0
 
@@ -140,11 +123,18 @@ class ColSheetModel(BaseModel):
                 "sheet_name": sheet_name,
             }
 
-            for k, _ in mapping_dict.items():
-                model_dict[k] = query_results[count].first()
-                if isinstance(model_dict[k], str):
-                    model_dict[k] = model_dict[k].strip()
+            for field_name, _ in mapping_dict.items():
+                raw = (
+                    value_ranges[count].get("values", [[None]])
+                    if count < len(value_ranges)
+                    else [[None]]
+                )
+                val = raw[0][0] if raw and raw[0] else None
+                if isinstance(val, str):
+                    val = val.strip()
+                model_dict[field_name] = val
                 count += 1
+
             try:
                 result_list.append(cls.model_validate(model_dict))
             except ValidationError as e:
@@ -155,24 +145,19 @@ class ColSheetModel(BaseModel):
                     )
                 )
 
-        cls.batch_update_note_message(
+        await cls.batch_update_note_message(
             sheet_id=sheet_id, sheet_name=sheet_name, update_payloads=error_list
         )
 
         return result_list
 
     @classmethod
-    @retry_on_fail(max_retries=3, sleep_interval=30)
-    def batch_update(
+    async def batch_update(
         cls,
         sheet_id: str,
         sheet_name: str,
         list_object: list[Self],
     ) -> None:
-        worksheet = cls.get_worksheet(
-            sheet_id=sheet_id,
-            sheet_name=sheet_name,
-        )
         mapping_dict = cls.updated_mapping_fields()
         update_batch = []
 
@@ -182,43 +167,33 @@ class ColSheetModel(BaseModel):
             for k, v in mapping_dict.items():
                 update_batch.append(
                     {
-                        "range": f"{v}{object.index}",
+                        "range": f"{sheet_name}!{v}{object.index}",
                         "values": [[model_dict[k]]],
                     }
                 )
 
         if len(list_object) > 0:
-            worksheet.batch_update(
-                update_batch, value_input_option=ValueInputOption.user_entered
-            )
+            await async_sheets_client.batch_update(sheet_id, update_batch)
 
-    @retry_on_fail(max_retries=3, sleep_interval=30)
-    def update(
+    async def update(
         self,
     ) -> None:
         mapping_dict = self.updated_mapping_fields()
         model_dict = self.model_dump(mode="json")
 
-        worksheet = self.get_worksheet(
-            sheet_id=self.sheet_id, sheet_name=self.sheet_name
-        )
-
         update_batch = []
         for k, v in mapping_dict.items():
             update_batch.append(
                 {
-                    "range": f"{v}{self.index}",
+                    "range": f"{self.sheet_name}!{v}{self.index}",
                     "values": [[model_dict[k]]],
                 }
             )
 
-        worksheet.batch_update(
-            update_batch, value_input_option=ValueInputOption.user_entered
-        )
+        await async_sheets_client.batch_update(self.sheet_id, update_batch)
 
     @classmethod
-    @retry_on_fail(max_retries=5, sleep_interval=30)
-    def update_note_message(
+    async def update_note_message(
         cls,
         sheet_id: str,
         sheet_name: str,
@@ -228,33 +203,34 @@ class ColSheetModel(BaseModel):
         for field_name, field_info in cls.model_fields.items():
             if hasattr(field_info, "metadata"):
                 for metadata in field_info.metadata:
-                    if COL_META in metadata and IS_NOTE_META in metadata:
-                        worksheet = cls.get_worksheet(
-                            sheet_id=sheet_id,
-                            sheet_name=sheet_name,
-                        )
-
-                        worksheet.batch_update(
+                    if (
+                        COL_META in metadata
+                        and IS_NOTE_META in metadata
+                        and metadata[IS_NOTE_META]
+                    ):
+                        await async_sheets_client.batch_update(
+                            sheet_id,
                             [
                                 {
-                                    "range": f"{metadata[COL_META]}{index}",
+                                    "range": f"{sheet_name}!{metadata[COL_META]}{index}",
                                     "values": [[messages]],
                                 }
                             ],
-                            value_input_option=ValueInputOption.user_entered,
                         )
                         return
 
         raise SheetError("Can't update sheet message")
 
     @classmethod
-    @retry_on_fail(max_retries=5, sleep_interval=30)
-    def batch_update_note_message(
+    async def batch_update_note_message(
         cls,
         sheet_id: str,
         sheet_name: str,
         update_payloads: list[NoteMessageUpdatePayload],
     ):
+        if not update_payloads:
+            return
+
         for field_name, field_info in cls.model_fields.items():
             if hasattr(field_info, "metadata"):
                 for metadata in field_info.metadata:
@@ -263,65 +239,37 @@ class ColSheetModel(BaseModel):
                         and IS_NOTE_META in metadata
                         and metadata[IS_NOTE_META]
                     ):
-                        worksheet = cls.get_worksheet(
-                            sheet_id=sheet_id,
-                            sheet_name=sheet_name,
-                        )
-
                         batch: list[dict] = []
                         for payload in update_payloads:
                             batch.append(
                                 {
-                                    "range": f"{metadata[COL_META]}{payload.index}",
+                                    "range": f"{sheet_name}!{metadata[COL_META]}{payload.index}",
                                     "values": [[payload.message]],
                                 }
                             )
-                        worksheet.batch_update(
-                            batch, value_input_option=ValueInputOption.user_entered
-                        )
+                        await async_sheets_client.batch_update(sheet_id, batch)
                         return
 
-        raise SheetError("Can't update sheet message")
+        # No note field defined on this model — silently skip rather than crash the batch
+        return
 
     @classmethod
-    @retry_on_fail(max_retries=5, sleep_interval=30)
-    def free_style_batch_update(
+    async def free_style_batch_update(
         cls,
         sheet_id: str,
         sheet_name: str,
         update_payloads: list[BatchCellUpdatePayload],
     ):
-        worksheet = cls.get_worksheet(sheet_id=sheet_id, sheet_name=sheet_name)
         batch: list[dict] = []
         for payload in update_payloads:
             batch.append(
                 {
-                    "range": payload.cell,
+                    "range": f"{sheet_name}!{payload.cell}",
                     "values": [[payload.value]],
                 }
             )
 
-        worksheet.batch_update(batch, value_input_option=ValueInputOption.user_entered)
-
-    @classmethod
-    @retry_on_fail(max_retries=5, sleep_interval=10)
-    def get_cell_value(
-        cls,
-        sheet_id: str,
-        sheet_name: str,
-        cell: str,
-    ) -> Any | None:
-        res = gsheet_client.http_client.values_get(
-            params={"valueRenderOption": "UNFORMATTED_VALUE"},
-            id=sheet_id,
-            range=f"{sheet_name}!{cell}",
-        )
-
-        stock = res.get("values", None)
-        if stock:
-            return stock[0][0]
-
-        return None
+        await async_sheets_client.batch_update(sheet_id, batch)
 
 
 class RowModel(ColSheetModel):
@@ -420,18 +368,25 @@ class RowModel(ColSheetModel):
     ] = None
 
     @classmethod
-    @retry_on_fail(max_retries=5, sleep_interval=10)
-    def get_run_indexes(
-        cls, sheet_id: str, sheet_name: str, col_index: int
+    async def get_run_indexes(
+        cls, sheet_id: str, sheet_name: str, col: str
     ) -> list[int]:
-        sheet = cls.get_worksheet(sheet_id=sheet_id, sheet_name=sheet_name)
+        """Get row indexes where the specified column contains a CheckType value.
+
+        Args:
+            sheet_id: The spreadsheet ID
+            sheet_name: The sheet name
+            col: Column letter (e.g., "B", "AA", "AB")
+
+        Returns:
+            List of 1-based row indexes
+        """
+        rows = await async_sheets_client.get_column_values(sheet_id, sheet_name, col)
         run_indexes = []
-        check_col = sheet.col_values(col_index)
-        for idx, value in enumerate(check_col):
-            idx += 1
+        for idx, row in enumerate(rows, start=1):
+            value = row[0] if row else ""
             if not isinstance(value, str):
                 value = str(value)
-            if value in [type.value for type in CheckType]:
+            if value in [t.value for t in CheckType]:
                 run_indexes.append(idx)
-
         return run_indexes

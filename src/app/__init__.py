@@ -1,6 +1,6 @@
 import logging
 
-from ._config import Config
+from ._config import Config, load_sheets_config
 
 ## Seting logger
 # Configure logging once at the application level
@@ -16,5 +16,8 @@ logger = logging.getLogger(__name__)
 
 config = Config.from_env()
 
+# Loaded at import time; exits on invalid config
+sheets_config = load_sheets_config()
 
-__all__ = ["config", "logger"]
+
+__all__ = ["config", "logger", "sheets_config"]

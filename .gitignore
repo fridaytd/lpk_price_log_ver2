@@ -15,6 +15,8 @@ wheels/
 
 # keys
 keys.json
+# Keys folder (service account JSON files — never commit)
+keys/*.json
 
 # Setting.envs
 *.env
@@ -26,6 +28,13 @@ downloaded_files/
 data/*
 !data/.gitkeep
 
+# Sheets config (contains real spreadsheet IDs — use sheets_config.example.yaml as template)
+sheets_config.yaml
+
 # Data
 user_dir/*
 !user_dir/.gitkeep
+
+_bmad
+_bmad-output
+.claude
