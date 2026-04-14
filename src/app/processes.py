@@ -3,32 +3,38 @@ from typing import Final
 import asyncio
 
 from app import config, logger
-from app.sheet.utils import fri_a1_range_to_grid_range
-from .sheet import async_sheets_client
+# Removed: fri_a1_range_to_grid_range was used only in the removed find_cell_to_update function
+# from app.sheet.utils import fri_a1_range_to_grid_range
+# Removed: async_sheets_client was used only in the removed find_cell_to_update function
+# from .sheet import async_sheets_client
 
 from .lapakgaming.api_client import lapakgaming_api_client
 from .lapakgaming.consts import COUNTRY_CODES
 from .lapakgaming.models import Product as LapakgamingProduct
-from .sheet.enums import CheckType
-from .sheet.models import BatchCellUpdatePayload, RowModel
+
+# Removed: CheckType was used only in the removed FILL_IN check
+# from .sheet.enums import CheckType
+# Removed: BatchCellUpdatePayload was used only in the removed batch_update_price function
+# from .sheet.models import BatchCellUpdatePayload
+from .sheet.models import RowModel
 from ._config import SheetEntry
 from .utils import note_message, split_list
 
 SEPERATED_CHAR: Final[str] = ","
-RELAX_TIME_CELL: Final[str] = "Q2"
 
 
-def rowcol_to_a1(row: int, col: int) -> str:
-    """Convert row and column numbers to A1 notation (e.g., 1, 1 -> A1)."""
-    if col < 1 or row < 1:
-        raise ValueError("Both row and column must be >= 1")
-
-    col_str = ""
-    while col > 0:
-        col -= 1
-        col_str = chr(ord("A") + (col % 26)) + col_str
-        col //= 26
-    return f"{col_str}{row}"
+# Removed: rowcol_to_a1 was used only in the removed find_cell_to_update function
+# def rowcol_to_a1(row: int, col: int) -> str:
+#     """Convert row and column numbers to A1 notation (e.g., 1, 1 -> A1)."""
+#     if col < 1 or row < 1:
+#         raise ValueError("Both row and column must be >= 1")
+#
+#     col_str = ""
+#     while col > 0:
+#         col -= 1
+#         col_str = chr(ord("A") + (col % 26)) + col_str
+#         col //= 26
+#     return f"{col_str}{row}"
 
 
 def to_product_dict(
@@ -47,14 +53,15 @@ def is_valid_product(
     row_model: RowModel,
     lapakgaming_product: LapakgamingProduct,
 ) -> bool:
-    if row_model.STATUS and lapakgaming_product.status not in row_model.STATUS:
-        return False
+    # Removed: STATUS and process_time were removed from RowModel
+    # if row_model.STATUS and lapakgaming_product.status not in row_model.STATUS:
+    #     return False
 
-    if (
-        row_model.process_time
-        and lapakgaming_product.process_time > row_model.process_time
-    ):
-        return False
+    # if (
+    #     row_model.process_time
+    #     and lapakgaming_product.process_time > row_model.process_time
+    # ):
+    #     return False
 
     return True
 
@@ -108,130 +115,134 @@ def min_lapakgaming_products(
     return min_price_products[0]
 
 
-async def find_cell_to_update(
-    row_models: list[RowModel], sheet_id: str
-) -> dict[str, str]:
-    mapping_dict: dict[str, str] = {}
+# Removed: find_cell_to_update used fields (FILL_IN, ID_SHEET, SHEET, COL_NOTE, CODE, COL_CODE)
+# that were removed from RowModel.
+# async def find_cell_to_update(
+#     row_models: list[RowModel], sheet_id: str
+# ) -> dict[str, str]:
+#     mapping_dict: dict[str, str] = {}
+#
+#     sheet_get_batch_dict: dict[str, dict[str, list[str]]] = {}
+#
+#     for row_model in row_models:
+#         if (
+#             row_model.FILL_IN
+#             and row_model.ID_SHEET
+#             and row_model.SHEET
+#             and row_model.COL_NOTE
+#             and row_model.CODE
+#             and row_model.COL_CODE
+#         ):
+#             range_code = f"{row_model.COL_CODE}:{row_model.COL_CODE}"
+#             if row_model.ID_SHEET not in sheet_get_batch_dict:
+#                 sheet_get_batch_dict[row_model.ID_SHEET] = {}
+#                 sheet_get_batch_dict[row_model.ID_SHEET][row_model.SHEET] = [range_code]
+#             else:
+#                 if row_model.SHEET not in sheet_get_batch_dict[row_model.ID_SHEET]:
+#                     sheet_get_batch_dict[row_model.ID_SHEET][row_model.SHEET] = [
+#                         range_code
+#                     ]
+#                 else:
+#                     sheet_get_batch_dict[row_model.ID_SHEET][row_model.SHEET].append(
+#                         range_code
+#                     )
+#
+#     # Use async_sheets_client instead of gspread
+#     ranges_to_read = []
+#     for id_sheet, sheet_names in sheet_get_batch_dict.items():
+#         for name, ranges in sheet_names.items():
+#             for range_code in ranges:
+#                 ranges_to_read.append(f"{name}!{range_code}")
+#
+#     if not ranges_to_read:
+#         return mapping_dict
+#
+#     response = await async_sheets_client.batch_get(sheet_id, ranges_to_read)
+#     value_ranges = response.get("valueRanges", [])
+#
+#     # Build result dict similar to original
+#     sheet_get_batch_result_dict: dict[str, dict[str, dict[str, list]]] = {}
+#     range_index = 0
+#
+#     for id_sheet, sheet_names in sheet_get_batch_dict.items():
+#         for name, ranges in sheet_names.items():
+#             for range_code in ranges:
+#                 if range_index < len(value_ranges):
+#                     values = value_ranges[range_index].get("values", [])
+#                     if id_sheet not in sheet_get_batch_result_dict:
+#                         sheet_get_batch_result_dict[id_sheet] = {}
+#                     if name not in sheet_get_batch_result_dict[id_sheet]:
+#                         sheet_get_batch_result_dict[id_sheet][name] = {}
+#                     sheet_get_batch_result_dict[id_sheet][name][range_code] = values
+#                 range_index += 1
+#
+#     for row_model in row_models:
+#         if (
+#             row_model.ID_SHEET
+#             and row_model.SHEET
+#             and row_model.COL_NOTE
+#             and row_model.CODE
+#             and row_model.COL_CODE
+#         ):
+#             # Convert to A1 notation
+#             range_code = f"{row_model.COL_CODE}:{row_model.COL_CODE}"
+#             range_note = f"{row_model.COL_NOTE}:{row_model.COL_NOTE}"
+#
+#             codes_grid = (
+#                 sheet_get_batch_result_dict.get(row_model.ID_SHEET, {})
+#                 .get(row_model.SHEET, {})
+#                 .get(range_code, [])
+#             )
+#
+#             code_grid_range = fri_a1_range_to_grid_range(range_code)
+#             note_grid_range = fri_a1_range_to_grid_range(range_note)
+#             for i, code_row in enumerate(codes_grid):
+#                 for j, code_col in enumerate(code_row):
+#                     if (
+#                         isinstance(code_col, str)
+#                         and row_model.CODE.strip() == code_col.strip()
+#                     ):
+#                         target_row_index = i + 1 + code_grid_range.startRowIndex
+#                         target_col_index = j + 1 + note_grid_range.startColumnIndex
+#                         mapping_dict[str(row_model.index)] = rowcol_to_a1(
+#                             target_row_index, target_col_index
+#                         )
+#
+#     return mapping_dict
 
-    sheet_get_batch_dict: dict[str, dict[str, list[str]]] = {}
 
-    for row_model in row_models:
-        if (
-            row_model.FILL_IN
-            and row_model.ID_SHEET
-            and row_model.SHEET
-            and row_model.COL_NOTE
-            and row_model.CODE
-            and row_model.COL_CODE
-        ):
-            range_code = f"{row_model.COL_CODE}:{row_model.COL_CODE}"
-            if row_model.ID_SHEET not in sheet_get_batch_dict:
-                sheet_get_batch_dict[row_model.ID_SHEET] = {}
-                sheet_get_batch_dict[row_model.ID_SHEET][row_model.SHEET] = [range_code]
-            else:
-                if row_model.SHEET not in sheet_get_batch_dict[row_model.ID_SHEET]:
-                    sheet_get_batch_dict[row_model.ID_SHEET][row_model.SHEET] = [
-                        range_code
-                    ]
-                else:
-                    sheet_get_batch_dict[row_model.ID_SHEET][row_model.SHEET].append(
-                        range_code
-                    )
-
-    # Use async_sheets_client instead of gspread
-    ranges_to_read = []
-    for id_sheet, sheet_names in sheet_get_batch_dict.items():
-        for name, ranges in sheet_names.items():
-            for range_code in ranges:
-                ranges_to_read.append(f"{name}!{range_code}")
-
-    if not ranges_to_read:
-        return mapping_dict
-
-    response = await async_sheets_client.batch_get(sheet_id, ranges_to_read)
-    value_ranges = response.get("valueRanges", [])
-
-    # Build result dict similar to original
-    sheet_get_batch_result_dict: dict[str, dict[str, dict[str, list]]] = {}
-    range_index = 0
-
-    for id_sheet, sheet_names in sheet_get_batch_dict.items():
-        for name, ranges in sheet_names.items():
-            for range_code in ranges:
-                if range_index < len(value_ranges):
-                    values = value_ranges[range_index].get("values", [])
-                    if id_sheet not in sheet_get_batch_result_dict:
-                        sheet_get_batch_result_dict[id_sheet] = {}
-                    if name not in sheet_get_batch_result_dict[id_sheet]:
-                        sheet_get_batch_result_dict[id_sheet][name] = {}
-                    sheet_get_batch_result_dict[id_sheet][name][range_code] = values
-                range_index += 1
-
-    for row_model in row_models:
-        if (
-            row_model.ID_SHEET
-            and row_model.SHEET
-            and row_model.COL_NOTE
-            and row_model.CODE
-            and row_model.COL_CODE
-        ):
-            # Convert to A1 notation
-            range_code = f"{row_model.COL_CODE}:{row_model.COL_CODE}"
-            range_note = f"{row_model.COL_NOTE}:{row_model.COL_NOTE}"
-
-            codes_grid = (
-                sheet_get_batch_result_dict.get(row_model.ID_SHEET, {})
-                .get(row_model.SHEET, {})
-                .get(range_code, [])
-            )
-
-            code_grid_range = fri_a1_range_to_grid_range(range_code)
-            note_grid_range = fri_a1_range_to_grid_range(range_note)
-            for i, code_row in enumerate(codes_grid):
-                for j, code_col in enumerate(code_row):
-                    if (
-                        isinstance(code_col, str)
-                        and row_model.CODE.strip() == code_col.strip()
-                    ):
-                        target_row_index = i + 1 + code_grid_range.startRowIndex
-                        target_col_index = j + 1 + note_grid_range.startColumnIndex
-                        mapping_dict[str(row_model.index)] = rowcol_to_a1(
-                            target_row_index, target_col_index
-                        )
-
-    return mapping_dict
-
-
-async def batch_update_price(
-    to_be_updated_row_models: list[RowModel],
-    sheet_id: str,
-    sheet_name: str,
-):
-    update_dict: dict[str, dict[str, list[BatchCellUpdatePayload]]] = {}
-
-    update_cell_mapping = await find_cell_to_update(to_be_updated_row_models, sheet_id)
-
-    for row_model in to_be_updated_row_models:
-        if row_model.ID_SHEET and row_model.SHEET and row_model.COL_NOTE:
-            if row_model.ID_SHEET not in update_dict:
-                update_dict[row_model.ID_SHEET] = {}
-
-            if row_model.SHEET not in update_dict[row_model.ID_SHEET]:
-                update_dict[row_model.ID_SHEET][row_model.SHEET] = []
-
-            if str(row_model.index) in update_cell_mapping:
-                update_dict[row_model.ID_SHEET][row_model.SHEET].append(
-                    BatchCellUpdatePayload[str](
-                        cell=update_cell_mapping[str(row_model.index)],
-                        value=row_model.LOWEST_PRICE if row_model.LOWEST_PRICE else "",
-                    )
-                )
-
-    for sheet_id, sheet_names in update_dict.items():
-        for sheet_name, update_batch in sheet_names.items():
-            await RowModel.free_style_batch_update(
-                sheet_id=sheet_id, sheet_name=sheet_name, update_payloads=update_batch
-            )
+# Removed: batch_update_price used fields (ID_SHEET, SHEET, COL_NOTE) removed from RowModel,
+# and calls find_cell_to_update which is also removed.
+# async def batch_update_price(
+#     to_be_updated_row_models: list[RowModel],
+#     sheet_id: str,
+#     sheet_name: str,
+# ):
+#     update_dict: dict[str, dict[str, list[BatchCellUpdatePayload]]] = {}
+#
+#     update_cell_mapping = await find_cell_to_update(to_be_updated_row_models, sheet_id)
+#
+#     for row_model in to_be_updated_row_models:
+#         if row_model.ID_SHEET and row_model.SHEET and row_model.COL_NOTE:
+#             if row_model.ID_SHEET not in update_dict:
+#                 update_dict[row_model.ID_SHEET] = {}
+#
+#             if row_model.SHEET not in update_dict[row_model.ID_SHEET]:
+#                 update_dict[row_model.ID_SHEET][row_model.SHEET] = []
+#
+#             if str(row_model.index) in update_cell_mapping:
+#                 update_dict[row_model.ID_SHEET][row_model.SHEET].append(
+#                     BatchCellUpdatePayload[str](
+#                         cell=update_cell_mapping[str(row_model.index)],
+#                         value=row_model.LOWEST_PRICE if row_model.LOWEST_PRICE else "",
+#                     )
+#                 )
+#
+#     for sheet_id, sheet_names in update_dict.items():
+#         for sheet_name, update_batch in sheet_names.items():
+#             await RowModel.free_style_batch_update(
+#                 sheet_id=sheet_id, sheet_name=sheet_name, update_payloads=update_batch
+#             )
 
 
 async def batch_process(
@@ -250,8 +261,6 @@ async def batch_process(
         indexes=indexes,
     )
 
-    to_be_updated_row_models: list[RowModel] = []
-
     # Process for each row model
     for row_model in row_models:
         product_codes = product_code_from_str(row_model.code)
@@ -268,6 +277,8 @@ async def batch_process(
         if min_price_product is None:
             row_model.LOWEST_PRICE = ""
             row_model.NOTE = note_message(datetime.now(), min_price_product, __products)
+            row_model.LOG_CODE = ""
+            row_model.LOG_COUNTRY = ""
 
         else:
             row_model.LOWEST_PRICE = str(min_price_product.price)
@@ -280,12 +291,15 @@ async def batch_process(
                     if product.code != min_price_product.code
                 ],
             )
-            if row_model.FILL_IN == CheckType.RUN.value:
-                to_be_updated_row_models.append(row_model)
+            row_model.LOG_CODE = min_price_product.code
+            row_model.LOG_COUNTRY = min_price_product.country_code
+            # Removed: FILL_IN / batch_update_price were removed from RowModel
+            # if row_model.FILL_IN == CheckType.RUN.value:
+            #     to_be_updated_row_models.append(row_model)
 
-    logger.info(f"batch_process: updating prices for rows {indexes[0]}–{indexes[-1]}")
-    if to_be_updated_row_models:
-        await batch_update_price(to_be_updated_row_models, sheet_id, sheet_name)
+    # Removed: batch_update_price is removed (depended on FILL_IN, ID_SHEET, SHEET, COL_NOTE, COL_CODE)
+    # if to_be_updated_row_models:
+    #     await batch_update_price(to_be_updated_row_models, sheet_id, sheet_name)
 
     logger.info(f"batch_process: writing sheet for rows {indexes[0]}–{indexes[-1]}")
     await RowModel.batch_update(
@@ -297,7 +311,7 @@ async def batch_process(
     logger.info(
         f"batch_process: complete — sheet={sheet_name} "
         f"rows={indexes[0]}–{indexes[-1]} "
-        f"rows_read={len(row_models)} rows_written={len(to_be_updated_row_models)}"
+        f"rows_read={len(row_models)}"
     )
 
 

@@ -297,73 +297,39 @@ class RowModel(ColSheetModel):
             COL_META: "E",
         },
     ]
-    LOWEST_PRICE: Annotated[
+    country_code_priority: Annotated[
         str | None,
         {
             COL_META: "F",
+        },
+    ] = None
+    LOWEST_PRICE: Annotated[
+        str | None,
+        {
+            COL_META: "G",
             IS_UPDATE_META: True,
         },
     ] = None
     NOTE: Annotated[
         str | None,
         {
-            COL_META: "G",
+            COL_META: "H",
             IS_UPDATE_META: True,
             IS_NOTE_META: True,
         },
     ] = None
-    STATUS: Annotated[
+    LOG_CODE: Annotated[
         str | None,
         {
-            COL_META: "H",
-        },
-    ] = None
-    process_time: Annotated[
-        int | None,
-        {
             COL_META: "I",
+            IS_UPDATE_META: True,
         },
     ] = None
-    country_code_priority: Annotated[
+    LOG_COUNTRY: Annotated[
         str | None,
         {
             COL_META: "J",
-        },
-    ] = None
-    FILL_IN: Annotated[
-        str | None,
-        {
-            COL_META: "K",
-        },
-    ] = None
-    ID_SHEET: Annotated[
-        str | None,
-        {
-            COL_META: "L",
-        },
-    ] = None
-    SHEET: Annotated[
-        str | None,
-        {
-            COL_META: "M",
-        },
-    ] = None
-    COL_NOTE: Annotated[
-        str | None,
-        {
-            COL_META: "N",
-        },
-    ] = None
-    CODE: Annotated[
-        str | None,
-        {
-            COL_META: "O",
-        },
-    ] = None
-    COL_CODE: Annotated[
-        str | None,
-        {
-            COL_META: "P",
+            IS_UPDATE_META: True,
         },
     ] = None
 
