@@ -13,15 +13,21 @@ class Config(BaseModel):
 
     LAPAK_API_KEY: str  # Lapakgaming API Bearer token
 
-    PROCESS_BATCH_SIZE: int  # Number of rows per batch to avoid rate limits
-
+    PROCESS_BATCH_SIZE: int  # Number of rows per batch for logging sheets
     PARALLEL_BATCH_COUNT: (
-        int  # Number of batches to process concurrently within a sheet (e.g. 4)
+        int  # Number of batches to process concurrently for logging sheets (e.g. 4)
+    )
+
+    LISTING_BATCH_SIZE: int  # Number of rows per batch for listing sheets
+    LISTING_PARALLEL_BATCH_COUNT: (
+        int  # Number of batches to process concurrently for listing sheets (e.g. 4)
     )
 
     RATE_LIMIT_WAIT_SECONDS: (
         float  # Seconds to wait after all keys in the pool have hit 429 (e.g. 60.0)
     )
+
+    RELAX_AFTER_EACH_ROUND: float = 60
 
     @staticmethod
     def from_env(dotenv_path: str = "settings.env") -> "Config":
@@ -35,7 +41,8 @@ class SheetEntry(BaseModel):
 
 
 class SheetsConfig(BaseModel):
-    sheets: list[SheetEntry]
+    listing_sheets: list[SheetEntry]
+    logging_sheets: list[SheetEntry]
 
 
 def load_sheets_config(config_path: Path | None = None) -> SheetsConfig:
@@ -47,7 +54,11 @@ def load_sheets_config(config_path: Path | None = None) -> SheetsConfig:
     try:
         with open(config_path) as f:
             data = yaml.safe_load(f)
-        return SheetsConfig.model_validate(data)
+        cfg = SheetsConfig.model_validate(data)
+        print(
+            f"Loaded {len(cfg.listing_sheets)} listing sheet(s), {len(cfg.logging_sheets)} logging sheet(s)"
+        )
+        return cfg
     except FileNotFoundError:
         print(f"ERROR: sheets_config.yaml not found at {config_path}")
         sys.exit(1)

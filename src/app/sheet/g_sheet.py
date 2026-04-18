@@ -185,6 +185,26 @@ class AsyncSheetsClient:
         return values[0] if values else []
 
     @SHEETS_WRITE_RETRY
+    async def batch_clear(
+        self, spreadsheet_id: str, ranges: list[str]
+    ) -> None:
+        """Clear the content of the given ranges using the batchClear API."""
+        if not ranges:
+            return
+        logger.info(
+            f"AsyncSheetsClient.batch_clear: spreadsheet={spreadsheet_id[:8]}…"
+        )
+
+        async def make_request(headers: dict) -> httpx.Response:
+            return await self._client.post(
+                f"{SHEETS_BASE_URL}/{spreadsheet_id}/values:batchClear",
+                headers=headers,
+                json={"ranges": ranges},
+            )
+
+        await self._execute_with_key_rotation(make_request)
+
+    @SHEETS_WRITE_RETRY
     async def free_style_batch_update(
         self, spreadsheet_id: str, payload: list[Any]
     ) -> None:

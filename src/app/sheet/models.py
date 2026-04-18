@@ -2,10 +2,9 @@ from datetime import datetime
 
 from typing import Annotated, Final, Self, TypeVar, Generic, Any
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
 from . import async_sheets_client
-from .enums import CheckType
 from .exceptions import SheetError
 from ..utils import formated_datetime
 
@@ -273,12 +272,12 @@ class ColSheetModel(BaseModel):
 
 
 class RowModel(ColSheetModel):
-    CHECK: Annotated[
-        str,
+    Code_Prefix: Annotated[
+        str | None,
         {
-            COL_META: "B",
+            COL_META: "A",
         },
-    ]
+    ] = None
     GAME: Annotated[
         str | None,
         {
@@ -292,11 +291,12 @@ class RowModel(ColSheetModel):
         },
     ] = None
     code: Annotated[
-        str,
+        str | None,
         {
             COL_META: "E",
+            IS_UPDATE_META: True,
         },
-    ]
+    ] = None
     country_code_priority: Annotated[
         str | None,
         {
@@ -334,25 +334,102 @@ class RowModel(ColSheetModel):
     ] = None
 
     @classmethod
-    async def get_run_indexes(
-        cls, sheet_id: str, sheet_name: str, col: str
-    ) -> list[int]:
-        """Get row indexes where the specified column contains a CheckType value.
+    async def get_run_indexes(cls, sheet_id: str, sheet_name: str) -> list[int]:
+        """Get row indexes where col A has a non-empty value.
 
         Args:
             sheet_id: The spreadsheet ID
             sheet_name: The sheet name
-            col: Column letter (e.g., "B", "AA", "AB")
 
         Returns:
             List of 1-based row indexes
         """
-        rows = await async_sheets_client.get_column_values(sheet_id, sheet_name, col)
+        rows = await async_sheets_client.get_column_values(sheet_id, sheet_name, "A")
         run_indexes = []
         for idx, row in enumerate(rows, start=1):
             value = row[0] if row else ""
             if not isinstance(value, str):
                 value = str(value)
-            if value in [t.value for t in CheckType]:
+            if value.strip():
                 run_indexes.append(idx)
         return run_indexes
+
+
+class ListingRowModel(ColSheetModel):
+    CHECK: Annotated[
+        str | None,
+        {
+            COL_META: "A",
+        },
+    ] = None
+    code: Annotated[
+        str | None,
+        {
+            COL_META: "B",
+            IS_UPDATE_META: True,
+        },
+    ] = None
+    category_code: Annotated[
+        str | None,
+        {
+            COL_META: "C",
+            IS_UPDATE_META: True,
+        },
+    ] = None
+    name: Annotated[
+        str | None,
+        {
+            COL_META: "D",
+            IS_UPDATE_META: True,
+        },
+    ] = None
+    provider_code: Annotated[
+        str | None,
+        {
+            COL_META: "E",
+            IS_UPDATE_META: True,
+        },
+    ] = None
+    price: Annotated[
+        str | None,
+        {
+            COL_META: "F",
+            IS_UPDATE_META: True,
+        },
+    ] = None
+    process_time: Annotated[
+        str | None,
+        {
+            COL_META: "G",
+            IS_UPDATE_META: True,
+        },
+    ] = None
+    country_code: Annotated[
+        str | None,
+        {
+            COL_META: "H",
+            IS_UPDATE_META: True,
+        },
+    ] = None
+    status: Annotated[
+        str | None,
+        {
+            COL_META: "I",
+            IS_UPDATE_META: True,
+        },
+    ] = None
+    Note: Annotated[
+        str | None,
+        {
+            COL_META: "J",
+            IS_UPDATE_META: True,
+            IS_NOTE_META: True,
+        },
+    ] = None
+
+    @field_validator("price", "process_time", mode="before")
+    @classmethod
+    def convert_to_str(cls, v: object) -> str | None:
+        if isinstance(v, (int, float)):
+            return str(v)
+        return v  # type: ignore[return-value]

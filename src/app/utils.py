@@ -1,3 +1,4 @@
+import re
 import time
 from datetime import datetime
 
@@ -40,6 +41,47 @@ def format_list_products(
         formated += f"{i + 1}/ {product.code}, {product.category_code}, {product.name}, {product.provider_code}, {product.price}, {product.process_time}, {product.country_code}. {product.status} \n"
 
     return formated
+
+
+def derive_codes_for_row(
+    col_a_prefix: str | None,
+    col_f_country_filter: str | None,
+    listing_codes: list[str | None],
+    listing_country_codes: list[str | None],
+) -> list[str]:
+    """Derive product codes for a logging row by scanning listing sheet data.
+
+    Args:
+        col_a_prefix: The game prefix from logging col A (e.g. "GAME")
+        col_f_country_filter: Optional country keyword from logging col F (e.g. "ID")
+        listing_codes: All product codes from listing sheet col B
+        listing_country_codes: Corresponding country codes from listing sheet col H (same order/length)
+
+    Returns:
+        List of matched product code strings (empty list if no match or col_a_prefix is falsy).
+    """
+    if not col_a_prefix:
+        return []
+
+    prefix_pattern = re.compile(rf"(?i)\b({re.escape(col_a_prefix)}-)")
+    country_pattern = (
+        re.compile(rf"(?i)\b({re.escape(col_f_country_filter)})")
+        if col_f_country_filter
+        else None
+    )
+
+    matched: list[str] = []
+    for code, country in zip(listing_codes, listing_country_codes):
+        if not code:
+            continue
+        if not prefix_pattern.search(code):
+            continue
+        if country_pattern is not None:
+            if not country or not country_pattern.search(country):
+                continue
+        matched.append(code)
+
+    return matched
 
 
 def note_message(

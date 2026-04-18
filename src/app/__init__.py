@@ -10,6 +10,10 @@ logging.basicConfig(
     handlers=[logging.StreamHandler()],
 )
 
+# Silence noisy third-party loggers — only show warnings and above from them
+for _noisy in ("httpx", "httpcore", "asyncio", "urllib3"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
+
 # Get logger for this module
 logger = logging.getLogger(__name__)
 

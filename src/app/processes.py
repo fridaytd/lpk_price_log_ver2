@@ -2,11 +2,13 @@ from datetime import datetime
 from typing import Final
 import asyncio
 
+from pydantic import BaseModel
+
 from app import config, logger
+
 # Removed: fri_a1_range_to_grid_range was used only in the removed find_cell_to_update function
 # from app.sheet.utils import fri_a1_range_to_grid_range
-# Removed: async_sheets_client was used only in the removed find_cell_to_update function
-# from .sheet import async_sheets_client
+from .sheet import async_sheets_client
 
 from .lapakgaming.api_client import lapakgaming_api_client
 from .lapakgaming.consts import COUNTRY_CODES
@@ -16,11 +18,19 @@ from .lapakgaming.models import Product as LapakgamingProduct
 # from .sheet.enums import CheckType
 # Removed: BatchCellUpdatePayload was used only in the removed batch_update_price function
 # from .sheet.models import BatchCellUpdatePayload
-from .sheet.models import RowModel
+from .sheet.models import RowModel, ListingRowModel
 from ._config import SheetEntry
-from .utils import note_message, split_list
+from .utils import note_message, split_list, derive_codes_for_row, formated_datetime
 
 SEPERATED_CHAR: Final[str] = ","
+
+LISTING_START_ROW: Final[int] = 4
+LOG_START_ROW: Final[int] = 3
+
+
+class InExKeywordMapping(BaseModel):
+    include_keywords: dict[str, list[str] | None]
+    exclude_keywords: dict[str, list[str] | None]
 
 
 # Removed: rowcol_to_a1 was used only in the removed find_cell_to_update function
@@ -250,6 +260,8 @@ async def batch_process(
     indexes: list[int],
     sheet_id: str,
     sheet_name: str,
+    listing_codes: list[str | None],
+    listing_country_codes: list[str | None],
 ):
     # Get all run row from sheet
     logger.info(
@@ -263,6 +275,15 @@ async def batch_process(
 
     # Process for each row model
     for row_model in row_models:
+        # Derive product codes from listing data
+        codes = derive_codes_for_row(
+            col_a_prefix=row_model.Code_Prefix,
+            col_f_country_filter=row_model.country_code_priority,
+            listing_codes=listing_codes,
+            listing_country_codes=listing_country_codes,
+        )
+        row_model.code = SEPERATED_CHAR.join(codes)
+
         product_codes = product_code_from_str(row_model.code)
         __products = [
             lapakgaming_product_dict[code]
@@ -293,13 +314,6 @@ async def batch_process(
             )
             row_model.LOG_CODE = min_price_product.code
             row_model.LOG_COUNTRY = min_price_product.country_code
-            # Removed: FILL_IN / batch_update_price were removed from RowModel
-            # if row_model.FILL_IN == CheckType.RUN.value:
-            #     to_be_updated_row_models.append(row_model)
-
-    # Removed: batch_update_price is removed (depended on FILL_IN, ID_SHEET, SHEET, COL_NOTE, COL_CODE)
-    # if to_be_updated_row_models:
-    #     await batch_update_price(to_be_updated_row_models, sheet_id, sheet_name)
 
     logger.info(f"batch_process: writing sheet for rows {indexes[0]}–{indexes[-1]}")
     await RowModel.batch_update(
@@ -318,28 +332,34 @@ async def batch_process(
 async def process_sheet(
     sheet: SheetEntry,
     lapakgaming_product_dict: dict[str, LapakgamingProduct],
+    listing_codes: list[str | None],
+    listing_country_codes: list[str | None],
 ):
-    """Process a single sheet: fetch run indexes, then process batches in parallel groups."""
+    """Process a single logging sheet: derive codes then fetch/update prices."""
     logger.info(
         f"process_sheet: starting sheet='{sheet.name}' id={sheet.spreadsheet_id[:8]}…"
     )
 
-    logger.info("Getting run indexes from sheet")
-    # Get run_indexes from sheet
+    # Step 1: Get active run indexes from col A (non-empty value)
     run_indexes = await RowModel.get_run_indexes(
         sheet_id=sheet.spreadsheet_id,
         sheet_name=sheet.name,
-        col="B",
     )
+
+    # Filter run index
+    run_indexes = [index for index in run_indexes if index >= LOG_START_ROW]
 
     logger.info(
         f"process_sheet: sheet='{sheet.name}' total_run_indexes={len(run_indexes)}"
     )
 
-    # Split into individual batches, then group batches for parallel dispatch
+    if not run_indexes:
+        logger.info(f"process_sheet: no active rows — sheet='{sheet.name}'")
+        return
+
+    # Step 2: Process price updates in parallel batches (code derivation happens inside each batch)
     batches = split_list(run_indexes, config.PROCESS_BATCH_SIZE)
     batch_groups = split_list(batches, config.PARALLEL_BATCH_COUNT)
-
     for group_idx, group in enumerate(batch_groups):
         first_row = group[0][0] if group and group[0] else "?"
         last_row = group[-1][-1] if group and group[-1] else "?"
@@ -354,6 +374,8 @@ async def process_sheet(
                     indexes=batch,
                     sheet_id=sheet.spreadsheet_id,
                     sheet_name=sheet.name,
+                    listing_codes=listing_codes,
+                    listing_country_codes=listing_country_codes,
                 )
                 for batch in group
             ],
@@ -375,6 +397,195 @@ async def process_sheet(
         f"process_sheet: all batches complete — sheet='{sheet.name}' "
         f"total_run_indexes={len(run_indexes)}"
     )
+
+
+async def get_include_exclude_keywords(
+    sheet_id: str, sheet_name: str
+) -> InExKeywordMapping:
+    """Read include/exclude keyword config from listing sheet rows 2 and 3."""
+    rows = await ListingRowModel.batch_get(
+        sheet_id=sheet_id,
+        sheet_name=sheet_name,
+        indexes=[2, 3],  # row 2 = include keywords, row 3 = exclude keywords
+    )
+
+    updated_fields = ListingRowModel.updated_mapping_fields()  # B–J fields only
+
+    include_dict: dict[str, list[str] | None] = {}
+    exclude_dict: dict[str, list[str] | None] = {}
+
+    include_row = (
+        rows[0]
+        if len(rows) > 0
+        else ListingRowModel(sheet_id=sheet_id, sheet_name=sheet_name, index=2)
+    )
+    exclude_row = (
+        rows[1]
+        if len(rows) > 1
+        else ListingRowModel(sheet_id=sheet_id, sheet_name=sheet_name, index=3)
+    )
+
+    for field_name in updated_fields:
+        inc_val = getattr(include_row, field_name)
+        include_dict[field_name] = (
+            [k.strip() for k in inc_val.split(SEPERATED_CHAR) if k.strip()]
+            if inc_val
+            else None
+        )
+        exc_val = getattr(exclude_row, field_name)
+        exclude_dict[field_name] = (
+            [k.strip() for k in exc_val.split(SEPERATED_CHAR) if k.strip()]
+            if exc_val
+            else None
+        )
+
+    return InExKeywordMapping(
+        include_keywords=include_dict,
+        exclude_keywords=exclude_dict,
+    )
+
+
+def is_valid_listing_product(
+    product: LapakgamingProduct,
+    include_keywords: dict[str, list[str] | None],
+    exclude_keywords: dict[str, list[str] | None],
+) -> bool:
+    """Return True if product passes all include/exclude keyword filters."""
+    for field_name, keywords in include_keywords.items():
+        if keywords is not None:
+            field_val = getattr(product, field_name, None) or ""
+            if all(kw not in str(field_val) for kw in keywords):
+                return False
+    for field_name, keywords in exclude_keywords.items():
+        if keywords is not None:
+            field_val = getattr(product, field_name, None) or ""
+            if any(kw in str(field_val) for kw in keywords):
+                return False
+    return True
+
+
+async def _clear_listing_sheet_stale_rows(
+    sheet_id: str,
+    sheet_name: str,
+    start_row: int,
+) -> None:
+    """Clear all rows from start_row to the last row that actually has data in the sheet.
+
+    Uses batchClear API. The end row is derived by reading column A to find the real
+    extent of data — no hardcoded lookahead constant needed.
+    """
+    col_b_values = await async_sheets_client.get_column_values(
+        sheet_id, sheet_name, "B"
+    )
+    last_data_row = len(col_b_values)  # 1-based: row count == last occupied row index
+
+    if start_row > last_data_row:
+        logger.info(
+            f"_clear_listing_sheet_stale_rows: nothing to clear on sheet='{sheet_name}' "
+            f"(start_row={start_row} > last_data_row={last_data_row})"
+        )
+        return
+
+    ranges = [f"{sheet_name}!A{start_row}:K{last_data_row}"]
+    await async_sheets_client.batch_clear(sheet_id, ranges)
+    logger.info(
+        f"_clear_listing_sheet_stale_rows: cleared rows {start_row}–{last_data_row} on sheet='{sheet_name}'"
+    )
+
+
+async def process_listing_sheet(
+    sheet: SheetEntry,
+    all_products: list[LapakgamingProduct],
+) -> list[LapakgamingProduct]:
+    """Process a single listing sheet: filter products by keywords and write to sheet."""
+    logger.info(
+        f"process_listing_sheet: starting sheet='{sheet.name}' id={sheet.spreadsheet_id[:8]}…"
+    )
+
+    # Step 1: Read keyword config from rows 2 and 3
+    keyword_mapping = await get_include_exclude_keywords(
+        sheet.spreadsheet_id, sheet.name
+    )
+
+    # Step 2: Filter products
+    valid_products = [
+        p
+        for p in all_products
+        if is_valid_listing_product(
+            p, keyword_mapping.include_keywords, keyword_mapping.exclude_keywords
+        )
+    ]
+    logger.info(
+        f"process_listing_sheet: sheet='{sheet.name}' valid_products={len(valid_products)}"
+    )
+
+    # Step 3: Build ListingRowModel instances starting at row 4
+    row_models: list[ListingRowModel] = []
+    for i, product in enumerate(valid_products):
+        row_models.append(
+            ListingRowModel(
+                sheet_id=sheet.spreadsheet_id,
+                sheet_name=sheet.name,
+                index=LISTING_START_ROW + i,
+                code=product.code,
+                category_code=product.category_code,
+                name=product.name,
+                provider_code=product.provider_code,
+                price=str(product.price),
+                process_time=str(product.process_time),
+                country_code=product.country_code,
+                status=product.status,
+                Note=formated_datetime(datetime.now()),
+            )
+        )
+
+    # Step 4: Write in batches
+    if row_models:
+        batches = split_list(row_models, config.LISTING_BATCH_SIZE)
+        batch_groups = split_list(batches, config.LISTING_PARALLEL_BATCH_COUNT)
+
+        for group_idx, group in enumerate(batch_groups):
+            first_row = group[0][0].index if group and group[0] else "?"
+            last_row = group[-1][-1].index if group and group[-1] else "?"
+            logger.info(
+                f"process_listing_sheet: sheet='{sheet.name}' dispatching group {group_idx + 1}/{len(batch_groups)} "
+                f"({len(group)} batches, rows {first_row}–{last_row})"
+            )
+            results = await asyncio.gather(
+                *[
+                    ListingRowModel.batch_update(
+                        sheet_id=sheet.spreadsheet_id,
+                        sheet_name=sheet.name,
+                        list_object=batch,
+                    )
+                    for batch in group
+                ],
+                return_exceptions=True,
+            )
+            for i, result in enumerate(results):
+                if isinstance(result, Exception):
+                    batch = group[i]
+                    logger.error(
+                        f"process_listing_sheet: batch failed — sheet='{sheet.name}' "
+                        f"rows={batch[0].index}–{batch[-1].index}: {result}",
+                        exc_info=result,
+                    )
+            logger.info(
+                f"process_listing_sheet: group {group_idx + 1}/{len(batch_groups)} complete — sheet='{sheet.name}'"
+            )
+
+    # Step 5: Clear stale rows beyond the last written row
+    clear_start = LISTING_START_ROW + len(valid_products)
+    await _clear_listing_sheet_stale_rows(
+        sheet_id=sheet.spreadsheet_id,
+        sheet_name=sheet.name,
+        start_row=clear_start,
+    )
+    logger.info(
+        f"process_listing_sheet: complete — sheet='{sheet.name}' "
+        f"total_valid_products={len(valid_products)}"
+    )
+    return valid_products
 
 
 async def _fetch_products_for_country(country_code: str) -> list[LapakgamingProduct]:
@@ -421,15 +632,43 @@ async def process():
     # Convert to dict keyed by product code (shared across all sheets)
     lapakgaming_product_dict = to_product_dict(all_products)
 
-    # Step 2: Process each sheet sequentially
+    # Step 2: Listing phase — update all listing sheets, collect listing data
     from app import sheets_config
 
     logger.info(
-        f"process: processing {len(sheets_config.sheets)} sheet(s) sequentially"
+        f"process: listing phase — processing {len(sheets_config.listing_sheets)} listing sheet(s)"
     )
-    for sheet in sheets_config.sheets:
+    all_listing_products: list[LapakgamingProduct] = []
+    for sheet in sheets_config.listing_sheets:
         try:
-            await process_sheet(sheet, lapakgaming_product_dict)
+            listing_products = await process_listing_sheet(sheet, all_products)
+            all_listing_products.extend(listing_products)
+        except Exception as e:
+            logger.error(
+                f"process: listing sheet='{sheet.name}' failed with unhandled error: {e}",
+                exc_info=True,
+            )
+
+    logger.info("process: listing phase complete, starting logging phase")
+
+    # Step 3: Logging phase — derive codes + process prices for each logging sheet
+    all_listing_codes: list[str | None] = [p.code for p in all_listing_products]
+    all_listing_country_codes: list[str | None] = [
+        p.country_code for p in all_listing_products
+    ]
+
+    logger.info(
+        f"process: processing {len(sheets_config.logging_sheets)} logging sheet(s) sequentially, "
+        f"{len(all_listing_codes)} listing codes available"
+    )
+    for sheet in sheets_config.logging_sheets:
+        try:
+            await process_sheet(
+                sheet,
+                lapakgaming_product_dict,
+                all_listing_codes,
+                all_listing_country_codes,
+            )
         except Exception as e:
             logger.error(
                 f"process: sheet='{sheet.name}' failed with unhandled error: {e}",
@@ -437,3 +676,4 @@ async def process():
             )
 
     logger.info("process: all sheets processed")
+    await asyncio.sleep(config.RELAX_AFTER_EACH_ROUND)
