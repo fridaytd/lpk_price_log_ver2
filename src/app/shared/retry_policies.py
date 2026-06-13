@@ -98,8 +98,8 @@ SHEETS_WRITE_RETRY = retry(
 )
 
 LAPAK_API_RETRY = retry(
-    stop=stop_after_attempt(3),
-    wait=wait_fixed(0.5),
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(min=2, max=30),
     retry=retry_if_exception(_is_retryable_lapak_error),
     before_sleep=before_sleep_log(logger, logging.WARNING),
     reraise=True,
